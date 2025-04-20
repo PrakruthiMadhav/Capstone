@@ -1,4 +1,4 @@
-FROM python:3.13-slim
+FROM python:3.10-slim
 
 # Install dependencies for OpenCV
 RUN apt-get update && apt-get install -y libgl1 libglib2.0-0
@@ -14,4 +14,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Run the server
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "server.py"]
