@@ -1,7 +1,7 @@
 # gesture_types.py - Defines the gesture types and alerts
 from enum import Enum, auto
 
-class GestureType(Enum):
+class GestureType(str,Enum):
     """Enum to represent different emergency gestures"""
     CROSSED_WRISTS = auto()    # Captive/abuse/hostage signaling for police
     CLUTCHING_CHEST = auto()   # Hand on chest (health emergency)
