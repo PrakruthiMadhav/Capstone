@@ -50,6 +50,7 @@ async def websocket_endpoint(websocket: WebSocket):
             # Receive base64 encoded image from client
             data = await websocket.receive_text()
             decoded = base64.b64decode(data)
+            logger.info("📸 Frame received from client.")
             img_bytes = io.BytesIO(decoded)
             img = Image.open(img_bytes)
             
