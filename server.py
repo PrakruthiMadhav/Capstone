@@ -4,6 +4,7 @@ import uvicorn
 import threading
 import cv2
 import time
+import logging
 from fastapi import FastAPI, WebSocket
 from PIL import Image
 import io
@@ -12,6 +13,15 @@ import numpy as np
 import asyncio
 import os
 import sys
+
+# Configure logging to send logs to stdout
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+
+logger = logging.getLogger(__name__)
 
 # Add the ai folder to the Python path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'ai'))
@@ -33,7 +43,7 @@ async def websocket_endpoint(websocket: WebSocket):
     global latest_processed_frame
     
     await websocket.accept()
-    print("✅ Client connected.")
+    logger.info("✅ Client connected.")
     
     try:
         while True:
@@ -57,59 +67,27 @@ async def websocket_endpoint(websocket: WebSocket):
             detected_gestures = [g for g in GestureType if detector.gestures[g]["detected"]]
             if detected_gestures:
                 for gesture in detected_gestures:
-                    print(f"[ALERT] {gesture.name.replace('_', ' ').title()} detected!")
-
-                    # 👉 Place to trigger custom alert logic
-                    # Example:
-                    # log_alert_to_db(gesture)
-                    # send_notification(gesture)
-                    # trigger_webhook(gesture)
+                    logger.warning(f"[ALERT] {gesture.name.replace('_', ' ').title()} detected!")
 
     except Exception as e:
-        print("❌ Disconnected or error:", e)
-
-
-# def display_processed_frames():
-#     """Displays processed frames in OpenCV window (optional)"""
-#     global latest_processed_frame
-    
-#     while True:
-#         with frame_lock:
-#             if latest_processed_frame is not None:
-#                 cv2.imshow('Emergency Gesture Detection', latest_processed_frame)
-        
-#         key = cv2.waitKey(5) & 0xFF
-#         if key == ord('q'):
-#             break
-#         elif key == ord('r'):
-#             detector.reset()
-#             print("Detection state reset")
-#         elif key == ord('d'):
-#             detector.DEBUG = not detector.DEBUG
-#             print(f"Debug mode {'ON' if detector.DEBUG else 'OFF'}")
-        
-#         time.sleep(0.33)  # ~3 FPS display loop
+        logger.error("❌ Disconnected or error: %s", e)
 
 
 def print_startup_info():
-    print("🚀 Emergency Gesture Detection Server is Starting...")
-    print("Detecting the following gestures:\n")
+    logger.info("🚀 Emergency Gesture Detection Server is Starting...")
+    logger.info("Detecting the following gestures:\n")
     for gesture in GestureType:
-        print(f"• {gesture.name.replace('_', ' ').title()}")
-    print("\nHold gestures for ~2.5s to trigger detection.")
-    print("Controls (OpenCV window): [q] Quit | [r] Reset | [d] Debug Toggle\n")
+        logger.info(f"• {gesture.name.replace('_', ' ').title()}")
+    logger.info("\nHold gestures for ~2.5s to trigger detection.")
+    logger.info("Controls (OpenCV window): [q] Quit | [r] Reset | [d] Debug Toggle\n")
 
 
 if __name__ == "__main__":
     print_startup_info()
     
-    # Start display thread
-    # display_thread = threading.Thread(target=display_processed_frames, daemon=True)
-    # display_thread.start()
-    
     # Run the FastAPI app
     uvicorn.run(app, host="0.0.0.0", port=8000)
     
-    # Cleanup after server stops
+    # Cleanup
     detector.release()
     cv2.destroyAllWindows()
