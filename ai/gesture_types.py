@@ -1,7 +1,7 @@
 # gesture_types.py - Defines the gesture types and alerts (Circle in Palm removed)
 from enum import Enum, auto
 
-class GestureType(Enum):
+class GestureType(str,Enum):
     """Enum to represent different emergency gestures"""
     CROSSED_WRISTS = auto()     # Captive/abuse/hostage signaling
     SURRENDER_POSE = auto()     # Hands raised, palms forward
