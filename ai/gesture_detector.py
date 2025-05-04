@@ -1,4 +1,4 @@
-# gesture_detector.py - Updated to delay detection until full hold time
+# gesture_detector.py
 import cv2
 import mediapipe as mp
 import time
@@ -227,12 +227,38 @@ class EmergencyGestureDetector:
             cv2.putText(frame, crossing_text, (10, 120), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
+    # This is a partial update for the gesture_detector.py file
+# Replace the _update_gesture_states method with this improved version
+
     def _update_gesture_states(self, frame, current_frame_confidences):
-        """Update gesture histories and process detection"""
+        """Update gesture histories and process detection - improved for better stability"""
         current_time = time.time()
         
         # Apply Kalman filtering for smoother confidence values
         smoothed_confidences = apply_kalman_filtering(current_frame_confidences, self.kalman_filters)
+
+        # IMPROVED: Special post-processing to address hand-over-mouth vs call symbol conflict
+        # If both gestures have significant confidence, adjust them based on relative strength
+        if (smoothed_confidences[GestureType.HAND_OVER_MOUTH] > 0.3 and 
+            smoothed_confidences[GestureType.CALL_SYMBOL] > 0.3):
+            
+            # If hand-over-mouth is stronger, further reduce call symbol
+            if smoothed_confidences[GestureType.HAND_OVER_MOUTH] > smoothed_confidences[GestureType.CALL_SYMBOL]:
+                ratio = smoothed_confidences[GestureType.HAND_OVER_MOUTH] / smoothed_confidences[GestureType.CALL_SYMBOL]
+                suppression = min(0.8, 0.5 + (ratio * 0.1))
+                smoothed_confidences[GestureType.CALL_SYMBOL] *= (1.0 - suppression)
+                
+                if self.DEBUG and self.frame_count % 20 == 0:
+                    print(f"Conflict resolution: Reduced CALL_SYMBOL by {suppression:.2f} (HOM stronger)")
+            else:
+                # If call symbol is stronger, only slightly reduce hand-over-mouth
+                # (we're less confident about call symbol detection overall)
+                ratio = smoothed_confidences[GestureType.CALL_SYMBOL] / smoothed_confidences[GestureType.HAND_OVER_MOUTH]
+                suppression = min(0.7, 0.4 + (ratio * 0.1))
+                smoothed_confidences[GestureType.HAND_OVER_MOUTH] *= (1.0 - suppression)
+                
+                if self.DEBUG and self.frame_count % 20 == 0:
+                    print(f"Conflict resolution: Reduced HAND_OVER_MOUTH by {suppression:.2f} (CS stronger)")
 
         # Track which gestures to display
         active_gestures = []
@@ -268,6 +294,15 @@ class EmergencyGestureDetector:
                     # Not enough history for filtering
                     weighted_confidences = history_array * weights
                     avg_confidence = np.sum(weighted_confidences) / np.sum(weights)
+                    
+                # IMPROVED: Extra smoothing for certain gesture types that are prone to confusion
+                if gesture in [GestureType.HAND_OVER_MOUTH, GestureType.CALL_SYMBOL]:
+                    # Implement stronger smoothing by blending with previous confidence
+                    # This helps prevent rapid oscillation between similar gestures
+                    if "confidence" in self.gestures[gesture]:
+                        prev_confidence = self.gestures[gesture]["confidence"]
+                        # Use 30% previous, 70% new - stronger smoothing effect
+                        avg_confidence = (prev_confidence * 0.3) + (avg_confidence * 0.7)
                 
                 self.gestures[gesture]["confidence"] = avg_confidence
             else:
@@ -296,6 +331,18 @@ class EmergencyGestureDetector:
                 if self.gestures[gesture]["tracking_duration"] >= self.REQUIRED_DURATION and not self.gestures[gesture]["detected"]:
                     self.gestures[gesture]["detected"] = True
                     print(GESTURE_ALERTS[gesture])
+                    
+                    # IMPROVED: When a gesture is officially detected, suppress other gestures more aggressively
+                    if gesture in [GestureType.HAND_OVER_MOUTH, GestureType.CALL_SYMBOL]:
+                        # Extra suppression for commonly confused gestures
+                        other_gesture = GestureType.CALL_SYMBOL if gesture == GestureType.HAND_OVER_MOUTH else GestureType.HAND_OVER_MOUTH
+                        # Reset the other gesture's tracking completely
+                        self.gestures[other_gesture]["is_tracking"] = False
+                        self.gestures[other_gesture]["start_time"] = None
+                        self.gestures[other_gesture]["tracking_duration"] = 0.0
+                        self.gestures[other_gesture]["detected"] = False
+                        # Also reset its history to prevent rapid re-detection
+                        self.gestures[other_gesture]["history"] = [0.0] * min(3, len(self.gestures[other_gesture]["history"]))
                 
                 # Add to active gestures for display (even if not officially detected yet)
                 active_gestures.append(
@@ -305,7 +352,7 @@ class EmergencyGestureDetector:
                 if self.gestures[gesture]["is_tracking"]:
                     # Only reset if confidence has been low for a few frames
                     low_confidence_frames = sum(1 for conf in self.gestures[gesture]["history"][-3:] 
-                                               if conf < tracking_threshold)
+                                            if conf < tracking_threshold)
                     
                     if low_confidence_frames >= 3:  # Reset after 3 consecutive low confidence frames
                         if self.DEBUG:
@@ -317,6 +364,26 @@ class EmergencyGestureDetector:
                 else:
                     # Ensure not detected if not tracking
                     self.gestures[gesture]["detected"] = False
+
+            # IMPROVED: Extra check for hand-over-mouth vs call symbol reset
+            # If one of these gestures becomes very confident, reset the other one completely
+            if gesture == GestureType.HAND_OVER_MOUTH and self.gestures[gesture]["confidence"] > 0.75:
+                other_gesture = GestureType.CALL_SYMBOL
+                if self.gestures[other_gesture]["is_tracking"] and not self.gestures[other_gesture]["detected"]:
+                    if self.DEBUG:
+                        print(f"Strong HAND_OVER_MOUTH detection: Resetting {other_gesture.name}")
+                    self.gestures[other_gesture]["is_tracking"] = False
+                    self.gestures[other_gesture]["start_time"] = None
+                    self.gestures[other_gesture]["tracking_duration"] = 0.0
+            
+            elif gesture == GestureType.CALL_SYMBOL and self.gestures[gesture]["confidence"] > 0.8:
+                other_gesture = GestureType.HAND_OVER_MOUTH
+                if self.gestures[other_gesture]["is_tracking"] and not self.gestures[other_gesture]["detected"]:
+                    if self.DEBUG:
+                        print(f"Strong CALL_SYMBOL detection: Resetting {other_gesture.name}")
+                    self.gestures[other_gesture]["is_tracking"] = False
+                    self.gestures[other_gesture]["start_time"] = None
+                    self.gestures[other_gesture]["tracking_duration"] = 0.0
 
         # Display all gestures with significant confidence
         # Sort by confidence
