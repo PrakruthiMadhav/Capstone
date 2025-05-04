@@ -1,4 +1,3 @@
-
 # utils/kalman_filter.py
 def apply_kalman_filtering(current_confidences, kalman_filters):
     """

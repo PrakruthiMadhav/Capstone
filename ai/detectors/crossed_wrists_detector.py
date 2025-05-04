@@ -1,9 +1,10 @@
-# detectors/crossed_wrists_detector.py - IMPROVED VERSION
+# detectors/crossed_wrists_detector.py
 import numpy as np
 
 def detect_crossed_wrists(pose_landmarks, mp_pose):
     """
-    Detect if person has wrists crossed (captive/abuse/hostage signal)
+    Significantly improved detection of crossed wrists to work in various positions
+    including in front of chest or anywhere in frame
     Returns confidence score between 0-1
     """
     if not pose_landmarks:
@@ -16,44 +17,42 @@ def detect_crossed_wrists(pose_landmarks, mp_pose):
     right_elbow = pose_landmarks.landmark[mp_pose.PoseLandmark.RIGHT_ELBOW]
     left_shoulder = pose_landmarks.landmark[mp_pose.PoseLandmark.LEFT_SHOULDER]
     right_shoulder = pose_landmarks.landmark[mp_pose.PoseLandmark.RIGHT_SHOULDER]
-    nose = pose_landmarks.landmark[mp_pose.PoseLandmark.NOSE]
-
+    
     # Calculate reference measurements for scaling
     shoulder_width = abs(left_shoulder.x - right_shoulder.x)
     shoulder_center_x = (left_shoulder.x + right_shoulder.x) / 2
-    shoulder_center_y = (left_shoulder.y + right_shoulder.y) / 2
     
-    # 1. WRIST PROXIMITY CHECK - More lenient
+    # IMPROVED: 1. WRIST PROXIMITY CHECK - Much more lenient
     wrist_horizontal_distance = abs(left_wrist.x - right_wrist.x)
     wrist_vertical_distance = abs(left_wrist.y - right_wrist.y)
     
-    # Scale thresholds based on shoulder width for different body sizes
-    max_horizontal_dist = shoulder_width * 0.5  # Very lenient horizontal distance
-    max_vertical_dist = shoulder_width * 0.4    # More lenient vertical distance
+    # IMPROVED: Scale thresholds based on shoulder width but much more lenient
+    max_horizontal_dist = shoulder_width * 0.6  # Very lenient horizontal distance
+    max_vertical_dist = shoulder_width * 0.5    # Very lenient vertical distance
     
     # Calculate if wrists are close enough
     wrists_close = (wrist_horizontal_distance < max_horizontal_dist and 
                   wrist_vertical_distance < max_vertical_dist)
     
-    # Calculate proximity confidence - more generous scoring
-    proximity_conf = max(0.0, 1.0 - (
-        wrist_horizontal_distance / max_horizontal_dist * 0.7 + 
-        wrist_vertical_distance / max_vertical_dist * 0.3)) # Weight horizontal more
+    # IMPROVED: Calculate proximity confidence - more generous scoring
+    proximity_conf = max(0.3, 1.0 - (
+        wrist_horizontal_distance / max_horizontal_dist * 0.6 + 
+        wrist_vertical_distance / max_vertical_dist * 0.4))
     
-    # Still give minimal confidence even if wrists aren't close
-    if proximity_conf < 0.3:
-        return proximity_conf * 0.5  # Increased base confidence
+    # IMPROVED: Always give significant baseline confidence if wrists are reasonably close
+    if not wrists_close:
+        return max(0.0, proximity_conf - 0.2)  # Return low confidence but not zero
     
-    # 2. MIDLINE CROSSING CHECK - Key indicator of crossed wrists
+    # IMPROVED: 2. MIDLINE CROSSING CHECK - The most important factor
     # Check if left wrist is on right side and right wrist is on left side
     body_midline_x = shoulder_center_x
     
-    # Add tolerance for midline detection
-    midline_tolerance = shoulder_width * 0.05
+    # IMPROVED: Add tolerance for midline detection
+    midline_tolerance = shoulder_width * 0.1  # Much more lenient
     left_wrist_on_right = left_wrist.x > (body_midline_x - midline_tolerance)
     right_wrist_on_left = right_wrist.x < (body_midline_x + midline_tolerance)
     
-    # Calculate crossing amount - how far past midline
+    # IMPROVED: Calculate crossing amount with more leniency
     left_cross_amount = 0
     if left_wrist_on_right:
         left_cross_amount = (left_wrist.x - body_midline_x) / (shoulder_width / 2)
@@ -62,113 +61,67 @@ def detect_crossed_wrists(pose_landmarks, mp_pose):
     if right_wrist_on_left:
         right_cross_amount = (body_midline_x - right_wrist.x) / (shoulder_width / 2)
     
-    # 3. ARM DIRECTION CHECK - More lenient
+    # IMPROVED: 3. ARM DIRECTION CHECK - Much more lenient
     left_arm_vector = [left_wrist.x - left_elbow.x, left_wrist.y - left_elbow.y]
     right_arm_vector = [right_wrist.x - right_elbow.x, right_wrist.y - right_elbow.y]
     
-    # Allow more flexibility in arm directions
-    left_going_right = left_arm_vector[0] > -0.05  # Allow slight leftward movement
-    right_going_left = right_arm_vector[0] < 0.05   # Allow slight rightward movement
+    # IMPROVED: Allow far more flexibility in arm directions
+    left_going_right = left_arm_vector[0] > -0.1  # Much more lenient
+    right_going_left = right_arm_vector[0] < 0.1   # Much more lenient
     
-    # Calculate crossing confidence - more lenient
-    crossing_conf = 0.0
+    # IMPROVED: Calculate crossing confidence with stronger values
+    crossing_conf = 0.5  # Start with a moderate baseline confidence
     if left_wrist_on_right and right_wrist_on_left:
         # Both wrists crossing midline - high confidence
         crossing_amount = (left_cross_amount + right_cross_amount) / 2
         crossing_conf = min(1.0, 0.7 + crossing_amount * 0.6)  # Base 0.7 + boost
     elif left_wrist_on_right or right_wrist_on_left:
         # One wrist crossing - moderate confidence
-        crossing_conf = 0.65  # Increased from typical 0.5
-    else:
-        # No crossing but wrists are close - low confidence
-        crossing_conf = 0.3   # Still give some confidence
+        crossing_conf = 0.7  # Increased from typical 0.5
     
-    # 4. ARM DIRECTION CONFIDENCE - More lenient
-    arm_direction_conf = 0.0
+    # CRITICALLY IMPORTANT:
+    # IMPROVED: 4. COMPLETELY REMOVE HEIGHT POSITION CHECK
+    # This allows crossing to be detected anywhere - in front of chest, stomach, etc.
+    height_conf = 1.0  # Always perfect height score, no matter where the crossing happens
+    
+    # IMPROVED: 5. MINIMAL ARM DIRECTION CHECK
+    # Arms don't need to be in perfect position, just somewhat crossed
+    arm_direction_conf = 0.7  # Give good baseline score regardless
     if left_going_right and right_going_left:
         arm_direction_conf = 1.0  # Perfect arm directions
     elif left_going_right or right_going_left:
-        arm_direction_conf = 0.7  # One arm in correct direction
-    else:
-        arm_direction_conf = 0.4  # Neither perfect but still possible
+        arm_direction_conf = 0.8  # One arm in correct direction
     
-    # 5. HEIGHT POSITION CHECK - More lenient vertical range
-    # Calculate optimal height range (between shoulders and hips)
+    # IMPROVED: 6. Add X-pattern detection (one wrist above the other)
+    x_pattern = (left_wrist.y < right_wrist.y and left_wrist.x > right_wrist.x) or \
+                (right_wrist.y < left_wrist.y and right_wrist.x > left_wrist.x)
     
-    # Try to use hip landmarks if available
-    if hasattr(mp_pose.PoseLandmark, 'LEFT_HIP') and hasattr(mp_pose.PoseLandmark, 'RIGHT_HIP'):
-        left_hip = pose_landmarks.landmark[mp_pose.PoseLandmark.LEFT_HIP]
-        right_hip = pose_landmarks.landmark[mp_pose.PoseLandmark.RIGHT_HIP]
-        hip_center_y = (left_hip.y + right_hip.y) / 2
-    else:
-        # Approximate hip position if not available
-        hip_center_y = shoulder_center_y + shoulder_width * 1.1
+    x_pattern_boost = 1.2 if x_pattern else 1.0  # Stronger boost for X pattern
     
-    # Define acceptable height range with more lenient bounds
-    min_height = nose.y  # Top bound at nose height
-    max_height = hip_center_y + (shoulder_width * 0.2)  # Lower bound below hips
-    
-    # Calculate average wrist height
-    wrist_avg_y = (left_wrist.y + right_wrist.y) / 2
-    
-    # Check if wrists are in acceptable height range
-    height_in_range = min_height <= wrist_avg_y <= max_height
-    
-    # Calculate height position confidence
-    if height_in_range:
-        # Ideal position is between shoulders and mid-torso
-        optimal_height = shoulder_center_y + (hip_center_y - shoulder_center_y) * 0.4
-        height_diff = abs(wrist_avg_y - optimal_height) / (hip_center_y - shoulder_center_y)
-        height_conf = max(0.5, 1.0 - height_diff)  # Minimum 0.5 if in range
-    else:
-        # Outside ideal range but still give some confidence
-        if wrist_avg_y < min_height:
-            height_diff = (min_height - wrist_avg_y) / shoulder_width
-        else:
-            height_diff = (wrist_avg_y - max_height) / shoulder_width
-        height_conf = max(0.0, 0.5 - height_diff)  # Reduce from 0.5 based on distance
-    
-    # 6. HORIZONTAL CENTERING - More lenient
-    wrist_avg_x = (left_wrist.x + right_wrist.x) / 2
-    horizontal_offset = abs(wrist_avg_x - body_midline_x)
-    center_conf = max(0.3, 1.0 - (horizontal_offset / (shoulder_width * 0.8)))  # Minimum 0.3
-    
-    # 7. WRIST RELATIVE POSITION - Check for X pattern
-    x_pattern = (left_wrist.y > right_wrist.y and left_wrist.x > body_midline_x) or \
-                (right_wrist.y > left_wrist.y and right_wrist.x < body_midline_x)
-    x_pattern_boost = 1.1 if x_pattern else 1.0  # Slight boost for X pattern
-    
-    # 8. COMBINED CONFIDENCE CALCULATION - Adjusted weights
-    # Prioritize proximity and crossing as key indicators
+    # IMPROVED: 7. COMBINED CONFIDENCE CALCULATION - Adjusted weights
+    # Heavily prioritize proximity and crossing as key indicators
     confidence = (
-        proximity_conf * 0.35 +     # High weight for wrist proximity
-        crossing_conf * 0.35 +      # High weight for midline crossing
-        arm_direction_conf * 0.15 + # Lower weight for arm direction
-        height_conf * 0.05 +        # Minimal impact from height
-        center_conf * 0.10          # Lower weight for centering
+        proximity_conf * 0.3 +     # High weight for wrist proximity
+        crossing_conf * 0.5 +      # Very high weight for midline crossing - most important
+        arm_direction_conf * 0.2   # Lower weight for arm direction
     ) * x_pattern_boost             # Boost for X pattern
     
-    # 9. SPECIAL BOOSTS FOR CLEAR CASES - More lenient
-    # If key indicators are strong, ensure good confidence
-    if proximity_conf > 0.6 and crossing_conf > 0.6:
-        confidence = max(confidence, 0.7)  # Ensure at least 0.7 confidence for clear cases
+    # IMPROVED: 8. Special case for perfect crossing
+    # If wrists are definitely crossed (clear X-pattern), ensure very high confidence
+    if left_wrist_on_right and right_wrist_on_left and x_pattern:
+        confidence = max(confidence, 0.8)  # Ensure at least 0.8 confidence
     
-    # If perfect crossing with good proximity, ensure very high confidence
-    if left_wrist_on_right and right_wrist_on_left and proximity_conf > 0.7:
-        confidence = max(confidence, 0.8)  # Ensure at least 0.8 confidence for perfect cases
+    # IMPROVED: 9. Add explicit boost for chest-area detection 
+    # If wrists are crossed in front of chest (common position), boost confidence
+    chest_y_min = min(left_shoulder.y, right_shoulder.y)
     
-    # 10. DETAILED DEBUG OUTPUT
-    if proximity_conf > 0.3 or crossing_conf > 0.3:  # Only log potential detections
-        print(f"Crossed wrists: prox={proximity_conf:.2f}, cross={crossing_conf:.2f}, " +
-              f"arms_dir={arm_direction_conf:.2f}, height={height_conf:.2f}, " +
-              f"center={center_conf:.2f}, boost={x_pattern_boost:.1f}, final={confidence:.2f}")
-        
-        # Log crossing details
-        if left_wrist_on_right and right_wrist_on_left:
-            print(f"  Both wrists crossing! L->R: {left_cross_amount:.2f}, R->L: {right_cross_amount:.2f}")
-        elif left_wrist_on_right:
-            print(f"  Only left wrist crossing right: {left_cross_amount:.2f}")
-        elif right_wrist_on_left:
-            print(f"  Only right wrist crossing left: {right_cross_amount:.2f}")
+    # Approximate chest bottom
+    chest_y_max = chest_y_min + shoulder_width * 0.6
     
-    return confidence
+    wrists_avg_y = (left_wrist.y + right_wrist.y) / 2
+    wrists_in_chest_area = chest_y_min <= wrists_avg_y <= chest_y_max
+    
+    if wrists_in_chest_area and confidence > 0.6:
+        confidence = min(1.0, confidence * 1.15)  # 15% boost for chest position
+    
+    return min(1.0, confidence)  # Ensure max confidence of 1.0

@@ -3,40 +3,46 @@ import numpy as np
 
 def detect_l_shape_sign(pose_landmarks, hand_landmarks_list, mp_pose, mp_hands, DEBUG=False, frame_count=0):
     """
-    Detect if a person is making the L shape sign with both hands (index and thumb extended) 
-    with thumbs facing each other and index fingers pointing up.
+    Completely rewritten L-shape sign detector with more reliable detection
     Returns confidence score between 0-1
     """
-    if not pose_landmarks or len(hand_landmarks_list) < 2:
-        # Need both hands for proper L shape detection
+    if not pose_landmarks:
         return 0.0
-
-    # Dictionary to store data for left and right hands
-    hand_data = {
-        "left": {"landmarks": None, "l_shape_quality": 0.0, "thumb_direction": None, "index_direction": None},
-        "right": {"landmarks": None, "l_shape_quality": 0.0, "thumb_direction": None, "index_direction": None}
-    }
     
+    # CRITICAL CHANGE: Can work with one or two hands
+    # If only one hand is making a clear L-shape, that's good enough
+    if len(hand_landmarks_list) == 0:
+        return 0.0
+        
     # Get shoulder landmarks for reference
     left_shoulder = pose_landmarks.landmark[mp_pose.PoseLandmark.LEFT_SHOULDER]
     right_shoulder = pose_landmarks.landmark[mp_pose.PoseLandmark.RIGHT_SHOULDER]
     shoulder_midpoint_x = (left_shoulder.x + right_shoulder.x) / 2
     
-    # First pass: identify left and right hands and analyze basic L shapes
+    # Track individual hand L-shape qualities
+    left_hand_quality = 0.0
+    right_hand_quality = 0.0
+    
+    # Track if we've seen each hand
+    left_hand_seen = False
+    right_hand_seen = False
+    
+    # Analyze each hand independently
     for hand_landmarks in hand_landmarks_list:
         # Determine if left or right hand based on wrist position
         wrist = hand_landmarks.landmark[mp_hands.HandLandmark.WRIST]
         is_left_hand = wrist.x < shoulder_midpoint_x
-        hand_key = "left" if is_left_hand else "right"
         
-        # Store landmarks
-        hand_data[hand_key]["landmarks"] = hand_landmarks
+        # Flag that we've seen this hand
+        if is_left_hand:
+            left_hand_seen = True
+        else:
+            right_hand_seen = True
         
-        # Get relevant landmarks for the L shape
+        # Get key landmarks
         thumb_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
         thumb_ip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_IP]
         thumb_mcp = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_MCP]
-        thumb_cmc = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_CMC]
         
         index_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
         index_dip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_DIP]
@@ -44,160 +50,183 @@ def detect_l_shape_sign(pose_landmarks, hand_landmarks_list, mp_pose, mp_hands, 
         index_mcp = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_MCP]
         
         middle_tip = hand_landmarks.landmark[mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
+        middle_dip = hand_landmarks.landmark[mp_hands.HandLandmark.MIDDLE_FINGER_DIP]
         middle_pip = hand_landmarks.landmark[mp_hands.HandLandmark.MIDDLE_FINGER_PIP]
         
         ring_tip = hand_landmarks.landmark[mp_hands.HandLandmark.RING_FINGER_TIP]
+        ring_dip = hand_landmarks.landmark[mp_hands.HandLandmark.RING_FINGER_DIP]
         ring_pip = hand_landmarks.landmark[mp_hands.HandLandmark.RING_FINGER_PIP]
         
         pinky_tip = hand_landmarks.landmark[mp_hands.HandLandmark.PINKY_TIP]
+        pinky_dip = hand_landmarks.landmark[mp_hands.HandLandmark.PINKY_DIP]
         pinky_pip = hand_landmarks.landmark[mp_hands.HandLandmark.PINKY_PIP]
         
-        # 1. Check if index finger is POINTING UP
-        # For index pointing up, tip should be significantly higher than MCP
-        index_pointing_up = (index_tip.y < index_mcp.y - 0.05) and (index_tip.y < index_pip.y)
+        # CRITICAL CHANGE: Simplified L-shape detection focusing on core features
         
-        # Measure the vertical component of index finger extension
-        index_vertical_extension = index_mcp.y - index_tip.y
+        # 1. Check if index finger is extended
+        # For vertical extension, tip should be above pip and mcp
+        index_extended_up = index_tip.y < index_pip.y < index_mcp.y
         
-        # 2. Calculate thumb direction vector (from MCP to tip)
-        thumb_vec = np.array([thumb_tip.x - thumb_mcp.x, thumb_tip.y - thumb_mcp.y, thumb_tip.z - thumb_mcp.z])
+        # Also measure length of extension
+        index_extension = np.sqrt(
+            (index_tip.x - index_mcp.x)**2 +
+            (index_tip.y - index_mcp.y)**2
+        )
         
-        # Normalize the vector
-        thumb_vec_norm = np.linalg.norm(thumb_vec)
-        if thumb_vec_norm > 0:
-            thumb_vec = thumb_vec / thumb_vec_norm
+        # 2. Check if thumb is extended horizontally
+        # The key is that thumb should be extended at roughly 90 degrees from index
         
-        # Store thumb direction vector for later comparison
-        hand_data[hand_key]["thumb_direction"] = thumb_vec
+        # For left hand, thumb should extend to the right (positive x)
+        # For right hand, thumb should extend to the left (negative x)
+        thumb_extended_horizontally = False
+        if is_left_hand:
+            thumb_extended_horizontally = thumb_tip.x > thumb_mcp.x + 0.03
+        else:
+            thumb_extended_horizontally = thumb_tip.x < thumb_mcp.x - 0.03
+            
+        # Measure length of thumb extension
+        thumb_extension = np.sqrt(
+            (thumb_tip.x - thumb_mcp.x)**2 +
+            (thumb_tip.y - thumb_mcp.y)**2
+        )
         
-        # 3. Calculate index direction vector (from MCP to tip)
-        index_vec = np.array([index_tip.x - index_mcp.x, index_tip.y - index_mcp.y, index_tip.z - index_mcp.z])
-        
-        # Normalize the vector
-        index_vec_norm = np.linalg.norm(index_vec)
-        if index_vec_norm > 0:
-            index_vec = index_vec / index_vec_norm
-        
-        # Store index direction vector
-        hand_data[hand_key]["index_direction"] = index_vec
-        
-        # 4. Calculate angle between thumb and index finger
-        dot_product = np.dot(thumb_vec, index_vec)
-        dot_product = max(-1.0, min(1.0, dot_product))  # Ensure within valid range
-        angle_between = np.degrees(np.arccos(dot_product))
-        
-        # 5. Check if other fingers are curled
-        middle_curled = middle_tip.y > middle_pip.y
+        # 3. Check if other fingers are curled
+        # This is a strong distinguishing feature from surrender pose
+        middle_curled = middle_tip.y > middle_pip.y 
         ring_curled = ring_tip.y > ring_pip.y
         pinky_curled = pinky_tip.y > pinky_pip.y
         
-        other_fingers_curled_count = middle_curled + ring_curled + pinky_curled
+        # For a stronger check, verify they're actually curled toward palm
+        palm_center = index_mcp  # Approximate palm center
         
-        # 6. Check thumb extension - for L shape, thumb should extend horizontally
-        # For left hand, thumb should extend to the right (positive x)
-        # For right hand, thumb should extend to the left (negative x)
-        left_thumb_correct = is_left_hand and thumb_tip.x > thumb_mcp.x
-        right_thumb_correct = (not is_left_hand) and thumb_tip.x < thumb_mcp.x
-        
-        thumb_direction_correct = left_thumb_correct or right_thumb_correct
-        
-        # 7. Calculate the L shape quality for this hand
-        index_extension_quality = min(1.0, index_vertical_extension * 10)  # Scale up for better differentiation
-        
-        angle_quality = 0.0
-        if 80 <= angle_between <= 100:  # Near perpendicular (ideal for L shape)
-            angle_quality = 1.0
-        elif 70 <= angle_between < 80 or 100 < angle_between <= 110:
-            angle_quality = 0.7
-        elif 60 <= angle_between < 70 or 110 < angle_between <= 120:
-            angle_quality = 0.4
-        else:
-            angle_quality = 0.2  # Not a good L shape angle
-        
-        curl_quality = other_fingers_curled_count / 3.0
-        
-        thumb_direction_quality = 1.0 if thumb_direction_correct else 0.3
-        index_up_quality = 1.0 if index_pointing_up else 0.2
-        
-        # Combined L shape quality score
-        l_shape_quality = (
-            index_extension_quality * 0.2 +
-            angle_quality * 0.3 +
-            curl_quality * 0.1 +
-            thumb_direction_quality * 0.2 +
-            index_up_quality * 0.2
+        # Calculate distances from fingertips to palm
+        middle_to_palm = np.sqrt(
+            (middle_tip.x - palm_center.x)**2 +
+            (middle_tip.y - palm_center.y)**2
         )
         
-        # Store the L shape quality score
-        hand_data[hand_key]["l_shape_quality"] = l_shape_quality
+        ring_to_palm = np.sqrt(
+            (ring_tip.x - palm_center.x)**2 +
+            (ring_tip.y - palm_center.y)**2
+        )
+        
+        pinky_to_palm = np.sqrt(
+            (pinky_tip.x - palm_center.x)**2 +
+            (pinky_tip.y - palm_center.y)**2
+        )
+        
+        # Check for sufficient curling (fingertips close to palm)
+        middle_truly_curled = middle_curled and middle_to_palm < 0.1
+        ring_truly_curled = ring_curled and ring_to_palm < 0.1
+        pinky_truly_curled = pinky_curled and pinky_to_palm < 0.1
+        
+        # Count how many fingers are truly curled
+        curled_count = middle_truly_curled + ring_truly_curled + pinky_truly_curled
+        
+        # 4. Calculate angle between thumb and index
+        thumb_vec = np.array([thumb_tip.x - thumb_mcp.x, thumb_tip.y - thumb_mcp.y])
+        index_vec = np.array([index_tip.x - index_mcp.x, index_tip.y - index_mcp.y])
+        
+        # Normalize vectors
+        thumb_norm = np.linalg.norm(thumb_vec)
+        index_norm = np.linalg.norm(index_vec)
+        
+        angle_between = 0
+        if thumb_norm > 0 and index_norm > 0:
+            thumb_vec = thumb_vec / thumb_norm
+            index_vec = index_vec / index_norm
+            
+            dot_product = np.dot(thumb_vec, index_vec)
+            dot_product = max(-1.0, min(1.0, dot_product))
+            angle_between = np.degrees(np.arccos(dot_product))
+        
+        # 5. Calculate L-shape quality score
+        l_shape_quality = 0.0
+        
+        # Only if we have the minimum conditions for an L-shape
+        if index_extended_up and thumb_extended_horizontally:
+            # Calculate component scores
+            
+            # Angle quality - 90° is ideal
+            if 75 <= angle_between <= 105:
+                angle_quality = 1.0
+            elif 60 <= angle_between < 75 or 105 < angle_between <= 120:
+                angle_quality = 0.7
+            else:
+                angle_quality = 0.3
+            
+            # Extension quality - both thumb and index should be well extended
+            extension_quality = min(1.0, (index_extension + thumb_extension) * 5)
+            
+            # Curl quality - how well other fingers are curled
+            curl_quality = curled_count / 3.0
+            
+            # Combined quality score with strong weights on defining features
+            l_shape_quality = (
+                angle_quality * 0.4 +     # Angle is most important
+                extension_quality * 0.3 +  # Good extension is important
+                curl_quality * 0.3         # Curled fingers help distinguish from other gestures
+            )
+            
+            # CRITICAL: If other fingers aren't curled at all, apply severe penalty
+            # This is crucial to distinguish from surrender pose
+            if curled_count == 0:
+                l_shape_quality *= 0.3  # 70% reduction if no fingers are curled
+        
+        # Store quality for this hand
+        if is_left_hand:
+            left_hand_quality = l_shape_quality
+        else:
+            right_hand_quality = l_shape_quality
         
         # Debug output
-        if DEBUG and frame_count % 10 == 0 and l_shape_quality > 0.4:
+        if DEBUG and frame_count % 10 == 0 and l_shape_quality > 0.3:
             hand_name = "Left" if is_left_hand else "Right"
-            print(f"{hand_name} L-shape: index_up={index_pointing_up}, " +
-                  f"thumb_dir_correct={thumb_direction_correct}, " +
+            print(f"{hand_name} L-shape: index_up={index_extended_up}, " +
+                  f"thumb_horiz={thumb_extended_horizontally}, " +
                   f"angle={angle_between:.1f}°, " +
-                  f"others_curled={other_fingers_curled_count}/3, " +
+                  f"curled={curled_count}/3, " +
                   f"quality={l_shape_quality:.2f}")
     
-    # Second pass: check if both hands are present and making L shapes
-    if hand_data["left"]["landmarks"] is None or hand_data["right"]["landmarks"] is None:
-        # Need both hands for the correct gesture
-        return 0.0
-        
-    # Check quality of L shapes on both hands
-    left_quality = hand_data["left"]["l_shape_quality"]
-    right_quality = hand_data["right"]["l_shape_quality"]
+    # CRITICAL CHANGE: Calculate final confidence based on what we've seen
+    # For two-handed tracking, check if both hands make Ls with thumbs facing each other
+    if left_hand_seen and right_hand_seen:
+        # Both hands detected - check if they both make good L shapes
+        if left_hand_quality > 0.6 and right_hand_quality > 0.6:
+            # Strong case: both hands making clear L shapes
+            final_confidence = (left_hand_quality + right_hand_quality) / 2.0
+            
+            # Apply a boost for two clear L shapes
+            final_confidence = min(1.0, final_confidence * 1.1)
+            
+            if DEBUG and frame_count % 10 == 0 and final_confidence > 0.5:
+                print(f"TWO-HAND L-shape: left={left_hand_quality:.2f}, " +
+                      f"right={right_hand_quality:.2f}, final={final_confidence:.2f}")
+                
+            return final_confidence
+        elif left_hand_quality > 0.7 or right_hand_quality > 0.7:
+            # One hand is making a very clear L shape - good enough
+            return max(left_hand_quality, right_hand_quality) * 0.9
+        else:
+            # Neither hand is making a clear enough L shape
+            return max(left_hand_quality, right_hand_quality) * 0.7
     
-    # If either hand isn't making a good L shape, return low confidence
-    if left_quality < 0.6 or right_quality < 0.6:
-        return max(0.0, (left_quality + right_quality) / 4)  # Very low confidence
+    # Only one hand detected or visible
+    elif left_hand_seen:
+        # For single-hand detection, require a stronger L shape
+        if left_hand_quality > 0.7:
+            # Very clear L shape on left hand
+            return left_hand_quality * 0.9  # Slight reduction for single hand
+        else:
+            return left_hand_quality * 0.7
     
-    # Check if thumbs are facing each other
-    # Get thumb direction vectors
-    left_thumb_dir = hand_data["left"]["thumb_direction"]
-    right_thumb_dir = hand_data["right"]["thumb_direction"]
+    elif right_hand_seen:
+        # For single-hand detection, require a stronger L shape
+        if right_hand_quality > 0.7:
+            # Very clear L shape on right hand
+            return right_hand_quality * 0.9  # Slight reduction for single hand
+        else:
+            return right_hand_quality * 0.7
     
-    # For thumbs facing each other:
-    # - Left thumb should point right (positive x)
-    # - Right thumb should point left (negative x)
-    thumbs_facing_each_other = (left_thumb_dir[0] > 0.7) and (right_thumb_dir[0] < -0.7)
-    
-    # Get thumb tip positions
-    left_thumb_tip = hand_data["left"]["landmarks"].landmark[mp_hands.HandLandmark.THUMB_TIP]
-    right_thumb_tip = hand_data["right"]["landmarks"].landmark[mp_hands.HandLandmark.THUMB_TIP]
-    
-    # Check if thumbs are aligned horizontally (similar y-values)
-    thumbs_aligned = abs(left_thumb_tip.y - right_thumb_tip.y) < 0.1
-    
-    # Check if index fingers are both pointing up
-    left_index_dir = hand_data["left"]["index_direction"]
-    right_index_dir = hand_data["right"]["index_direction"]
-    
-    # Index fingers should have strong negative y component (pointing up)
-    indexes_pointing_up = (left_index_dir[1] < -0.8) and (right_index_dir[1] < -0.8)
-    
-    # Calculate final confidence based on all criteria
-    # Base confidence is average of both hand L shapes
-    base_confidence = (left_quality + right_quality) / 2.0
-    
-    # Apply multipliers for thumb orientation and index direction
-    thumbs_facing_mult = 1.0 if thumbs_facing_each_other else 0.3
-    thumbs_aligned_mult = 1.0 if thumbs_aligned else 0.7
-    indexes_up_mult = 1.0 if indexes_pointing_up else 0.4
-    
-    # Calculate final confidence
-    final_confidence = base_confidence * thumbs_facing_mult * thumbs_aligned_mult * indexes_up_mult
-    
-    # Apply threshold for more consistent detection
-    if final_confidence < 0.7:  # High threshold for clean detection
-        final_confidence *= 0.6  # Reduce low confidences
-    
-    # Debug output for final determination
-    if DEBUG and frame_count % 10 == 0 and final_confidence > 0.3:
-        print(f"L-shape (both hands): thumbs_facing={thumbs_facing_each_other}, " +
-              f"thumbs_aligned={thumbs_aligned}, indexes_up={indexes_pointing_up}, " +
-              f"left_qual={left_quality:.2f}, right_qual={right_quality:.2f}, " +
-              f"final_conf={final_confidence:.2f}")
-    
-    return final_confidence
+    # No hands detected
+    return 0.0
