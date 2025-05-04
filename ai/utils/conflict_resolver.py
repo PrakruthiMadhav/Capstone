@@ -1,4 +1,4 @@
-# utils/conflict_resolver.py - UPDATED WITHOUT CIRCLE IN PALM
+# utils/conflict_resolver.py
 from gesture_types import GestureType
 
 def resolve_gesture_conflicts(confidences):
@@ -48,8 +48,8 @@ def resolve_gesture_conflicts(confidences):
         # Call symbol vs L-shape sign
         (GestureType.CALL_SYMBOL, GestureType.L_SHAPE_SIGN, 0.85),
         
-        # Hand over mouth vs other hand gestures
-        (GestureType.HAND_OVER_MOUTH, GestureType.CALL_SYMBOL, 0.85),
+        # Hand over mouth vs other hand gestures - increased suppression for call symbol
+        (GestureType.HAND_OVER_MOUTH, GestureType.CALL_SYMBOL, 0.95),  # Increased from 0.85 to 0.95
         (GestureType.HAND_OVER_MOUTH, GestureType.L_SHAPE_SIGN, 0.85),
         (GestureType.HAND_OVER_MOUTH, GestureType.CROSSED_WRISTS, 0.85),
         
@@ -90,13 +90,14 @@ def resolve_gesture_conflicts(confidences):
                 modified_confidences[gesture] *= (1.0 - suppression_strength)
     
     # Special handling for Call Symbol detection (reported as not detecting well)
+    # MODIFIED: Increased threshold, added hand-over-mouth check, reduced boost
     if (GestureType.CALL_SYMBOL in confidences and 
-        confidences[GestureType.CALL_SYMBOL] > 0.35 and
+        confidences[GestureType.CALL_SYMBOL] > 0.45 and  # Increased from 0.35 to 0.45
         primary_type != GestureType.CALL_SYMBOL):
         
-        # Only boost if primary isn't too strong
-        if primary_conf < 0.8:
-            modified_confidences[GestureType.CALL_SYMBOL] *= 1.2
+        # Only boost if primary isn't too strong and primary isn't hand over mouth
+        if primary_conf < 0.7 and primary_type != GestureType.HAND_OVER_MOUTH:
+            modified_confidences[GestureType.CALL_SYMBOL] *= 1.1  # Reduced from 1.2 to 1.1
             modified_confidences[GestureType.CALL_SYMBOL] = min(0.95, modified_confidences[GestureType.CALL_SYMBOL])
     
     # Special handling for L-shape when only one hand is detected
